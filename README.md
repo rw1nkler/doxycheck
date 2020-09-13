@@ -1,0 +1,16 @@
+Doxycheck
+=========
+
+```
+usage: doxycheck [-h] [--doxygen-html] [--sphinx-html] file
+
+Test doxygen/sphinx+breathe documentation
+
+positional arguments:
+  file            document to validate
+
+  optional arguments:
+    -h, --help      show this help message and exit
+    --doxygen-html  show Doxygen html
+    --sphinx-html   show Sphinx html
+```
