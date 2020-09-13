@@ -4,15 +4,15 @@ Doxycheck
 ```
 usage: doxycheck [-h] [--doxygen-html] [--sphinx-html] file
 
-Test doxygen/sphinx+breathe documentation
+Test doxygen code comments using doxygen/sphinx+breathe
 
 positional arguments:
   file            document to validate
 
-  optional arguments:
-    -h, --help      show this help message and exit
-    --doxygen-html  show Doxygen html
-    --sphinx-html   show Sphinx html
+optional arguments:
+  -h, --help      show this help message and exit
+  --doxygen-html  show Doxygen html
+  --sphinx-html   show Sphinx html
 ```
 
 ## Note

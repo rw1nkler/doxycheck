@@ -236,7 +236,7 @@ breathe_default_project = 'default'
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test doxygen/sphinx+breathe documentation")  # noqa: E501
+    parser = argparse.ArgumentParser(description="Test doxygen code comments using doxygen/sphinx+breathe")  # noqa: E501
     parser.add_argument("file", help="document to validate")
     parser.add_argument("--doxygen-html", action="store_true", help="show Doxygen html")  # noqa: E501
     parser.add_argument("--sphinx-html", action="store_true", help="show Sphinx html")  # noqa: E501
