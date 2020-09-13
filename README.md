@@ -14,3 +14,7 @@ positional arguments:
     --doxygen-html  show Doxygen html
     --sphinx-html   show Sphinx html
 ```
+
+## Note
+
+Currently, the tool is limited to checking C/C++ files
