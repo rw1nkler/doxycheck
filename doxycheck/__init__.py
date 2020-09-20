@@ -115,11 +115,10 @@ class Doxycheck:
 
         # Analyze inputs
 
-        self.file_in = dict()
-        self.dir_in = dict()
-
         logger.debug("Searching for input files...")
-        self._update_input_dicts(fname)
+
+        self.inputs = dict()
+        self._update_input_dict(fname)
 
     def _get_default_doxygen_config(self, field=None):
         """
@@ -150,41 +149,69 @@ class Doxycheck:
         else:
             return config[field]
 
-    def _update_input_dicts(self, fname):
+    def _update_input_dict(self, fname):
         assert isinstance(fname, list)
 
-        supported_exts = Doxycheck.C_EXTS
+        self._resolve_explicit_inputs(fname)
+        self._resolve_inputs_recursively()
 
-        # Resolve explicit sources
+        # from pprint import pformat
+        # logger.debug("Printing inputs...")
+        # logger.debug(pformat(self.inputs))
 
+    def _resolve_explicit_inputs(self, fname):
+
+        files = []
+        dirs = []
         for f in fname:
-            name = os.path.basename(f)
             _, ext = os.path.splitext(f)
 
-            inpath = os.path.realpath(f)
-            outpath = self.doxygen_out["srcdir"]
-
-            if os.path.isfile(f) and ext in supported_exts:
-                logger.debug("Adding file: {}".format(inpath))
-                self.file_in.update({name: {
-                    "in": inpath,
-                    "out": outpath
-                }})
+            if os.path.isfile(f) and ext in Doxycheck.C_EXTS:
+                files.append(f)
             elif os.path.isdir(f):
-                logger.debug("Adding directory: {}".format(inpath))
-                self.dir_in.update({name: {
-                    "in": inpath,
-                    "out": os.path.join(outpath, name),
-                    "files": list()
-                }})
+                dirs.append(f)
             else:
                 assert False, "Unknown type of {}".format(f)
 
-        # Resolve directories recursively
+        logger.debug("Adding directory: {}".format("."))
+        self.inputs.update({".": {
+             "in": ".",
+             "out": self.doxygen_out["srcdir"],
+             "files": list()
+        }})
+
+        for d in dirs:
+            name = os.path.basename(d)
+
+            inpath = os.path.realpath(d)
+            outpath = os.path.join(self.doxygen_out["srcdir"], name)
+
+            logger.debug("Adding directory: {}".format(name))
+            self.inputs.update({name: {
+                "in": inpath,
+                "out": outpath,
+                "files": list()
+            }})
+
+        for f in files:
+            name = os.path.basename(d)
+
+            inpath = os.path.realpath(d)
+            outpath = os.path.join(self.doxygen_out["srcdir"], name)
+
+            logger.debug("Adding file: {}".format(inpath))
+            file_dict = {
+                "in": inpath,
+                "out": outpath,
+            }
+
+            self.inputs["."]["files"].append(file_dict)
+
+    def _resolve_inputs_recursively(self):
 
         recursive_dirs = dict()
 
-        for root_name, path_dict in self.dir_in.items():
+        for root_name, path_dict in self.inputs.items():
             root_inpath = path_dict["in"]
             root_outpath = path_dict["out"]
 
@@ -207,7 +234,7 @@ class Doxycheck:
                 for f in files:
                     name, ext = os.path.splitext(f)
 
-                    if ext not in supported_exts:
+                    if ext not in Doxycheck.C_EXTS:
                         logger.debug("Skipping file: {}".format(f))
                         continue
 
@@ -222,12 +249,10 @@ class Doxycheck:
                         "out": f_outpath
                     }
 
-                    self.file_in.update({f_name: file_dict})
-
                     dirname = os.path.dirname(f_name)
                     recursive_dirs[dirname]["files"].append(file_dict)
 
-        self.dir_in = {**self.dir_in, **recursive_dirs}
+        self.inputs = {**self.inputs, **recursive_dirs}
 
     def check(self, doxygen_html, sphinx_html):
 
@@ -380,7 +405,7 @@ def main():
     args = parser.parse_args()
 
     doxycheck = Doxycheck(args.file)
-    doxycheck.check(args.doxygen_html, args.sphinx_html)
+    #doxycheck.check(args.doxygen_html, args.sphinx_html)
 
 
 if __name__ == "__main__":
