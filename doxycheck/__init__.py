@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 
 import os
-import parse
 import shutil
+import logging
 import tempfile
 import argparse
+import subprocess
 import webbrowser
 
 from sphinx.application import Sphinx
 from sphinx.util.docutils import docutils_namespace
 from doxygen import ConfigParser, Generator
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logging.basicConfig()
 
 
 def color_print(text, color=None, bold=False, underline=False, **kwargs):
@@ -41,11 +46,17 @@ def color_print(text, color=None, bold=False, underline=False, **kwargs):
     print(modifier, text, endmodifier, **kwargs)
 
 
+class DoxycheckError(Exception):
+    pass
+
+
 class Doxycheck:
 
+    C_EXTS = [".c", ".cc", ".cxx", ".cpp", ".c++", ".h", ".hh", ".hxx", ".hpp", ".h++"]  # Noqa: E501
     DOXYGEN_C_CONFIG = {
         "FULL_PATH_NAMES": "NO",
         "OPTIMIZE_OUTPUT_FOR_C": "YES",
+        "RECURSIVE": "YES",
 
         "GENERATE_HTML": "YES",
         "GENERATE_XML": "YES",
@@ -74,37 +85,158 @@ class Doxycheck:
     tempdir_prefix = "doxycheck_"
 
     def __init__(self, fname):
-        assert os.path.exists(fname)
+        assert isinstance(fname, list)
+        for f in fname:
+            assert os.path.exists(f), "File {} does not exist!".format(f)
 
-        self.fname = os.path.realpath(fname)
-        self.fbasename = os.path.basename(fname)
+        # Create temporary output directory
 
-        self.output_dir = self._mkdtemp()
+        self.outdir = self._mkdtemp()
+        logger.debug("Creating output directory: {}".format(self.outdir))
 
-        # Doxygen dirs
+        # Generated doxygen output dirs / files
 
-        self.output_src_dir = os.path.join(self.output_dir, "src")
-        self.output_src_file = os.path.join(self.output_src_dir, self.fbasename)  # noqa: E501
-        self.output_build_dir = os.path.join(self.output_dir, "build")
-        self.output_warn_file = os.path.join(self.output_dir, "warn.log")
-        self.output_doxy_file = os.path.join(self.output_dir, "doxyfile")
+        self.doxygen_out = {
+            "srcdir":   os.path.join(self.outdir, "src"),
+            "builddir": os.path.join(self.outdir, "build", "doxygen"),
+            "warnfile": os.path.join(self.outdir, "warn.log"),
+            "doxyfile": os.path.join(self.outdir, "doxyfile")
+        }
 
-        # Sphinx dirs
+        # Generated sphinx output dirs / files
 
-        self.sphinx_src_dir = os.path.join(self.output_dir, "sphinx")
-        self.sphinx_out_dir = os.path.join(self.output_build_dir, "sphinx")
-        self.sphinx_doctree_dir = os.path.join(self.sphinx_out_dir, "doctrees")
-        self.sphinx_log_file = os.path.join(self.sphinx_out_dir, "sphinx.log")
-        self.sphinx_warn_file = os.path.join(self.sphinx_out_dir, "warn.log")
+        self.sphinx_out = {
+            "srcdir":     os.path.join(self.outdir, "sphinx"),
+            "outdir":     os.path.join(self.outdir, "build", "sphinx"),
+            "doctreedir": os.path.join(self.outdir, "build", "doctrees"),
+            "logfile":    os.path.join(self.outdir, "build", "sphinx.log"),
+            "warnfile":   os.path.join(self.outdir, "build", "warn.log")
+        }
+
+        # Analyze inputs
+
+        self.file_in = dict()
+        self.dir_in = dict()
+
+        logger.debug("Searching for input files...")
+        self._update_input_dicts(fname)
+
+    def _get_default_doxygen_config(self, field=None):
+        """
+        Used to obtain Doxygen default configuration.
+
+        Args:
+            field: doxyfile value that should be returned
+
+        Returns:
+            If "field is None returns a dictionary with default
+            doxyfile contents
+            If "field" is specified returns a chosen configuration value.
+        """
+
+        DEFAULT_DOXYFILE_PATH = os.path.join(self.outdir, "default_doxyfile")
+
+        cmd = "doxygen -s -g {doxyfile}".format(doxyfile=DEFAULT_DOXYFILE_PATH)
+        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL)
+
+        config_parser = ConfigParser()
+        config = config_parser.load_configuration(DEFAULT_DOXYFILE_PATH)
+
+        if field is not None and field not in config:
+            raise DoxycheckError('Config value "{}" not in default doxyfile'.format(field))  # Noqa: E501
+
+        if field is None:
+            return config
+        else:
+            return config[field]
+
+    def _update_input_dicts(self, fname):
+        assert isinstance(fname, list)
+
+        supported_exts = Doxycheck.C_EXTS
+
+        # Resolve explicit sources
+
+        for f in fname:
+            name = os.path.basename(f)
+            _, ext = os.path.splitext(f)
+
+            inpath = os.path.realpath(f)
+            outpath = self.doxygen_out["srcdir"]
+
+            if os.path.isfile(f) and ext in supported_exts:
+                logger.debug("Adding file: {}".format(inpath))
+                self.file_in.update({name: {
+                    "in": inpath,
+                    "out": outpath
+                }})
+            elif os.path.isdir(f):
+                logger.debug("Adding directory: {}".format(inpath))
+                self.dir_in.update({name: {
+                    "in": inpath,
+                    "out": os.path.join(outpath, name),
+                    "files": list()
+                }})
+            else:
+                assert False, "Unknown type of {}".format(f)
+
+        # Resolve directories recursively
+
+        recursive_dirs = dict()
+
+        for root_name, path_dict in self.dir_in.items():
+            root_inpath = path_dict["in"]
+            root_outpath = path_dict["out"]
+
+            for root, dirs, files in os.walk(root_inpath):
+                relpath = os.path.relpath(root, start=root_inpath)
+
+                for d in dirs:
+                    d_inpath = os.path.join(root, d)
+                    d_outpath = os.path.realpath(os.path.join(root_outpath, relpath, d))  # noqa: E501
+                    d_relpath = os.path.relpath(d_inpath, start=root_inpath)  # noqa: E501
+                    d_name = os.path.join(root_name, d_relpath)
+
+                    logger.debug("Adding directory: {}".format(d_name))
+                    recursive_dirs.update({d_name: {
+                        "in":  d_inpath,
+                        "out": d_outpath,
+                        "files": list()
+                    }})
+
+                for f in files:
+                    name, ext = os.path.splitext(f)
+
+                    if ext not in supported_exts:
+                        logger.debug("Skipping file: {}".format(f))
+                        continue
+
+                    f_inpath = os.path.join(root, f)
+                    f_outpath = os.path.realpath(os.path.join(root_outpath, relpath, f))  # noqa: E501
+                    f_relpath = os.path.relpath(f_inpath, start=root_inpath)  # noqa: E501
+                    f_name = os.path.join(root_name, f_relpath)
+
+                    logger.debug("Adding file: {}".format(f_name))
+                    file_dict = {
+                        "in":  f_inpath,
+                        "out": f_outpath
+                    }
+
+                    self.file_in.update({f_name: file_dict})
+
+                    dirname = os.path.dirname(f_name)
+                    recursive_dirs[dirname]["files"].append(file_dict)
+
+        self.dir_in = {**self.dir_in, **recursive_dirs}
 
     def check(self, doxygen_html, sphinx_html):
 
-        # Prepare output directory tree
+        logger.debug("Preparing output Doxygen directories..")
 
-        os.mkdir(self.output_src_dir)
-        os.mkdir(self.output_build_dir)
+        os.makedirs(self.doxygen_out["srcdir"])
+        os.makedirs(self.doxygen_out["builddir"])
 
-        # Generate doxygen output and show warnings
+        logger.debug("Generating Doxygen output..")
 
         self._generate_doxygen()
         self._show_doxygen_warnings()
@@ -112,10 +244,10 @@ class Doxycheck:
         if doxygen_html:
             self._show_doxygen_html()
 
-        if sphinx_html:
-            self._generate_sphinx()
-            self._show_sphinx_html()
-            self._show_sphinx_warnings()
+        #if sphinx_html:
+        #     self._generate_sphinx()
+        #     self._show_sphinx_html()
+        #     self._show_sphinx_warnings()
 
         if not sphinx_html and not doxygen_html:
             self._clear()
@@ -127,27 +259,36 @@ class Doxycheck:
         shutil.rmtree(self.output_dir, ignore_errors=True)
 
     def _generate_doxygen(self):
-        assert os.path.exists(self.fname)
-
         # Copy source file and add doxygen header to ensure that file
         # index will be generated
 
-        with open(self.output_src_file, "a") as src:
-            src.write("/** @file */")
-            with open(self.fname) as inp_file:
-                src.write(inp_file.read())
+        # Create dirs
+
+        for name, path_dict in self.dir_in.items():
+            outpath = path_dict["out"]
+            os.mkdir(outpath)
+
+        # Copy files
+
+        for name, path_dict in self.file_in.items():
+            inpath = path_dict["in"]
+            outpath = path_dict["out"]
+
+            with open(inpath, "r") as f_in, open(outpath, "w") as f_out:
+                f_out.write("/** @file */")
+                f_out.write(f_in.read())
 
         # Complete config
 
         config = Doxycheck.DOXYGEN_C_CONFIG
-        config["INPUT"] = self.output_src_dir
-        config["OUTPUT_DIRECTORY"] = self.output_build_dir
-        config["WARN_LOGFILE"] = self.output_warn_file
-        config["PROJECT_NAME"] = self.fbasename
+        config["INPUT"] = self.doxygen_out["srcdir"]
+        config["OUTPUT_DIRECTORY"] = self.doxygen_out["builddir"]
+        config["WARN_LOGFILE"] = self.doxygen_out["warnfile"]
+        config["PROJECT_NAME"] = "Doxygen"
 
         # Save Doxygen configuration
 
-        doxyfile_tmpfile = self.output_doxy_file
+        doxyfile_tmpfile = self.doxygen_out["doxyfile"]
         config_parser = ConfigParser()
         config_parser.store_configuration(config, doxyfile_tmpfile)
 
@@ -159,14 +300,14 @@ class Doxycheck:
     def _generate_sphinx(self):
         # Prepare Sphinx directories
 
-        os.mkdir(self.sphinx_src_dir)
-        os.mkdir(self.sphinx_out_dir)
-        os.mkdir(self.sphinx_doctree_dir)
+        os.mkdir(self.sphinx_out["srcdir"])
+        os.mkdir(self.sphinx_out["outdir"])
+        os.mkdir(self.sphinx_out["doctreedir"])
 
         # Create minimal config
         sphinx_conf_file = os.path.join(self.sphinx_src_dir, "conf.py")
         sphinx_conf_content = """
-project = 'name'
+project = 'Doxygen'
 extensions = ['breathe']
 html_theme = 'sphinx_rtd_theme'
 
@@ -204,19 +345,10 @@ breathe_default_project = 'default'
             app.build()
 
     def _show_doxygen_warnings(self):
-        with open(self.output_warn_file) as wf:
+        with open(self.doxygen_out["warnfile"]) as wf:
             for line in wf.readlines():
-                result = parse.parse("{file}:{line}: {type}: {text}", line)
-
-                color = "YELLOW" if result["type"] == "warning" else "RED"
-                msg_type = result["type"].upper()
-                identifier = "{type} [{file}:{line}]:".format(
-                    type=msg_type,
-                    file=os.path.basename(result["file"]),
-                    line=result["line"],
-                )
-                color_print(identifier, bold=True, color=color, end='')
-                color_print(result["text"], color=color)
+                tmp = line.replace("{}/".format(self.doxygen_out["srcdir"]), "")  # Noqa: E501
+                color_print(tmp, color="YELLOW", end="")
 
     def _show_sphinx_warnings(self):
         if os.path.getsize(self.sphinx_warn_file) > 0:
@@ -224,10 +356,15 @@ breathe_default_project = 'default'
                 print(wf.read())
 
     def _show_doxygen_html(self):
-        name, ext = os.path.splitext(self.fbasename)
-        html_name = "build/html/{}_8{}.html".format(name, ext[1:])
-        html_file = os.path.join(self.output_dir, html_name)
 
+        if len(self.dir_in) == 0 and len(self.file_in) == 1:
+            file_name = os.path.basename(list(self.file_in.values())[0])
+            name, ext = os.path.splitext(file_name)
+            html_name = "html/{}_8{}.html".format(name, ext[1:])
+        else:
+            html_name = "html/files.html"
+
+        html_file = os.path.join(self.doxygen_out["builddir"], html_name)
         webbrowser.open(html_file)
 
     def _show_sphinx_html(self):
@@ -237,7 +374,7 @@ breathe_default_project = 'default'
 
 def main():
     parser = argparse.ArgumentParser(description="Test doxygen code comments using doxygen/sphinx+breathe")  # noqa: E501
-    parser.add_argument("file", help="document to validate")
+    parser.add_argument("file", nargs='+', help="document to validate")
     parser.add_argument("--doxygen-html", action="store_true", help="show Doxygen html")  # noqa: E501
     parser.add_argument("--sphinx-html", action="store_true", help="show Sphinx html")  # noqa: E501
     args = parser.parse_args()
