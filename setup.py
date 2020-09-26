@@ -22,11 +22,13 @@ setuptools.setup(
     ],
     python_requires='>=3.6',
     install_requires=[
-        'parse',
+        'breathe',
+        'colorama',
         'doxygen-interface',
+        'parse',
+        'pprint'
         'sphinx',
         'sphinx_rtd_theme',
-        'breathe'
     ],
     entry_points={
         "console_scripts": ['doxycheck=doxycheck:main']
