@@ -1,0 +1,16 @@
+language: minimal
+
+stages:
+  - name:
+    - Test
+
+install:
+  - sudo apt update
+  - sudo apt install python3 python3-pip python3-setuptools doxygen graphviz
+  - pip3 install -r requirements.txt
+
+jobs:
+    - stage: Tests
+      name: "Test VTR"
+      script:
+        - cd tests && python3 -m unittest test_vtr
