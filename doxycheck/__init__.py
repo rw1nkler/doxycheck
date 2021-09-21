@@ -398,6 +398,7 @@ def main():
     parser.add_argument("input", nargs='+', help="document or directory to validate")  # noqa: E501
     parser.add_argument("--doxygen-html", action="store_true", help="show doxygen html")  # noqa: E501
     parser.add_argument("--sphinx-html", action="store_true", help="show sphinx html")  # noqa: E501
+    parser.add_argument("--no-browser", action="store_true", help="don't show the generated html in the browser")  # noqa: E501
     args = parser.parse_args()
 
     colorama_init(autoreset=True)
